@@ -5,6 +5,7 @@ module HackerNews
   ) where
 
 import           Control.Concurrent.Async
+import           Control.Exception
 import           Control.Lens
 import           Data.Aeson
 import           Data.Aeson.Lens          (_String, key)
@@ -14,24 +15,34 @@ import           Data.Function
 import           Data.List                as DL
 import           Data.Map                 as Map
 import qualified Data.Text.Internal       as L
+import           Data.Time
 import           Network.HTTP.Simple      ()
 import           Network.Wreq
 import qualified Network.Wreq.Session     as S
 
+-- | An item can either be a top story or a comment here
 data Item =
   Item
-    { by    :: String
+    { idt   :: Maybe Int
+    , by    :: Maybe String
     , title :: Maybe String
     , kids  :: Maybe [Int]
     }
   deriving (Show)
 
+instance Eq Item where
+  (Item id1 _ _ _) == (Item id2 _ _ _) = id1 == id2
+
+instance Ord Item where
+  (Item id1 _ _ _) `compare` (Item id2 _ _ _) = id1 `compare` id2
+
 instance FromJSON Item where
   parseJSON (Object v) = do
-    by <- v .: "by"
+    idt <- v .:? "id"
+    by <- v .:? "by"
     title <- v .:? "title"
     kids <- v .:? "kids"
-    return (Item {by = by, title = title, kids = kids})
+    return (Item {idt = idt, by = by, title = title, kids = kids})
 
 type TopStoriesResponse = Response [Int]
 
@@ -57,29 +68,29 @@ getOneItemFromId x = do
   let body = r ^. responseBody
   return body
 
--- | Returns the author ('by' in the result JSON) of an Item from an ID
-getAuthorFromId :: Int -> IO L.Text
-getAuthorFromId x = do
-  r <- get (generateUrl x)
-  let body = r ^. responseBody . key "by" . _String
-  return body
-
 -- | Returns a list of all the titles ('title' in the result JSON) from a list of items
 getTitlesFromItems :: [Item] -> [String]
-getTitlesFromItems []                         = []
-getTitlesFromItems (Item _ (Just title) _:xs) = title : getTitlesFromItems xs
-getTitlesFromItems (Item _ Nothing _:xs)      = getTitlesFromItems xs
+getTitlesFromItems []                           = []
+getTitlesFromItems (Item _ _ (Just title) _:xs) = title : getTitlesFromItems xs
+getTitlesFromItems (Item _ _ Nothing _:xs)      = getTitlesFromItems xs
 
 -- | Returns a list of all the comments ('kids' in the result JSON) of from a list of Item
 getCommentsFromItems :: [Item] -> [[Int]]
 getCommentsFromItems [] = []
-getCommentsFromItems (Item _ _ (Just comments):xs) =
+getCommentsFromItems (Item _ _ _ (Just comments):xs) =
   comments : getCommentsFromItems xs
-getCommentsFromItems (Item _ _ Nothing:xs) = getCommentsFromItems xs
+getCommentsFromItems (Item _ _ _ Nothing:xs) = getCommentsFromItems xs
 
--- | Returns all the authors ('by' in the result JSON) from a list of ID
-getAuthorsFromIds :: [Int] -> IO [L.Text]
-getAuthorsFromIds = mapConcurrently getAuthorFromId
+-- | Returns a list of all the authors from a list of Items
+getAuthorsFromComments :: [Item] -> [String]
+getAuthorsFromComments [] = []
+getAuthorsFromComments (Item _ (Just author) _ _:xs) =
+  author : getAuthorsFromComments xs
+getAuthorsFromComments (Item _ Nothing _ _:xs) = getAuthorsFromComments xs
+
+-- | Returns all the comments ('kids' from the top story) from a list of ID
+getCommentsFromId :: [Int] -> IO [Item]
+getCommentsFromId = mapConcurrently getOneItemFromId
 
 -- | Returns a list of tuple consisting of (element, occurence)
 mostCommon :: Ord a => [a] -> [(a, Int)]
@@ -95,6 +106,7 @@ createTuppleFromTwoLists [] _          = []
 createTuppleFromTwoLists _ []          = []
 createTuppleFromTwoLists (x:xs) (y:ys) = (x, y) : createTuppleFromTwoLists xs ys
 
+-- | Returns the commentors names and occurence, this function also returns values in double, you need getCommentorAndFinalOccurence to remove them
 getTopCommentorAndOccurencePerStory ::
      Eq a => [(a, Int)] -> [(a, Int)] -> [(a, [(a, Int)])]
 getTopCommentorAndOccurencePerStory y [] = []
@@ -102,31 +114,50 @@ getTopCommentorAndOccurencePerStory y (a:xs) =
   (fst a, DL.filter ((== fst a) . fst) y) :
   getTopCommentorAndOccurencePerStory xs y
 
-filterWrongValues :: [(a, [(a, Int)])] -> [(a, Int)]
-filterWrongValues []                  = []
-filterWrongValues ((_, []):xs)        = filterWrongValues xs
-filterWrongValues ((x, (y, z):zs):xs) = (x, z) : filterWrongValues xs
+-- | Returns the commentors names and occurence in all comments recovered, removes double values from getTopCommentorAndOccurencePerStory
+getCommentorAndFinalOccurence :: [(String, [(String, Int)])] -> [(String, Int)]
+getCommentorAndFinalOccurence [] = []
+getCommentorAndFinalOccurence ((_, []):xs) = getCommentorAndFinalOccurence xs
+getCommentorAndFinalOccurence ((x, (y, z):zs):xs) =
+  (x, z) : getCommentorAndFinalOccurence xs
 
 getAllInfo :: IO ()
 getAllInfo = do
+  startTime <- getCurrentTime
   print "Hello"
   listOfIds <- getTop30Stories
   top30Stories <- mapConcurrently getOneItemFromId listOfIds
   print "30 top stories have been recovered from Hacker News"
   let listOfTitles = getTitlesFromItems top30Stories
-  let sublistsOfComments = getCommentsFromItems top30Stories
-  listOfAllCommentors <- mapConcurrently getAuthorsFromIds sublistsOfComments
-  print
-    "All the comments of the top stories have been recovered from Hacker News"
-  let numberOfCommentsPerAuthor = mostCommon (concat listOfAllCommentors)
-  let topCommentor = DL.map sortMostCommon listOfAllCommentors
-  let values =
+  -- List of direct commentors ID (commented directly on the story)
+  let listOfFirstCommentorsId = getCommentsFromItems top30Stories
+  -- List of direct commentors (commented directly on the story)
+  listOfFirstCommentors <-
+    mapConcurrently getCommentsFromId listOfFirstCommentorsId
+  -- List of sub commentors ID (commented on a comment)
+  let listOfSubCommentorsId = DL.map getCommentsFromItems listOfFirstCommentors
+  -- List of sub commentors (commented on a comment)
+  listOfSubCommentors <-
+    mapConcurrently getCommentsFromId (concat listOfSubCommentorsId)
+  -- Concatenation of direct and sub commenters (does not take into account sub commentors of sub commentors)
+  let listOfAllComments =
         DL.map
-          (getTopCommentorAndOccurencePerStory numberOfCommentsPerAuthor)
+          getAuthorsFromComments
+          (listOfFirstCommentors ++ listOfSubCommentors)
+  print listOfAllComments
+  let numberOfCommentsPerAuthor = mostCommon (concat listOfAllComments)
+  let topCommentor = DL.map sortMostCommon listOfAllComments
+  let topCommentorsWithOccurence =
+        DL.map
+          (getCommentorAndFinalOccurence .
+           getTopCommentorAndOccurencePerStory numberOfCommentsPerAuthor)
           topCommentor
-  let test = DL.map filterWrongValues values
-  let topCommentorPerStory = createTuppleFromTwoLists listOfTitles test
+  let topCommentorPerStory =
+        createTuppleFromTwoLists listOfTitles topCommentorsWithOccurence
   print
     "Here are the 30 top stories with their top commenters along with their total number of comments on thos 30 stories"
   print topCommentorPerStory
-  print "Goodbye"
+  endTime <- getCurrentTime
+  putStr
+    ("It took " ++
+     show (diffUTCTime endTime startTime) ++ " to get the results. Goodbye.")

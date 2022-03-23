@@ -38,6 +38,7 @@ executable test-smart-chain
                       , containers
                       , lens-aeson
                       , async
+                      , time
     other-extensions:       OverloadedStrings
     hs-source-dirs:   app
     default-language: Haskell2010
