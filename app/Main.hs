@@ -1,6 +1,6 @@
 module Main where
 
-import           HackerNews
+import           HackerNews (getAllInfo)
 
 -- MAIN
 main :: IO ()

@@ -4,20 +4,18 @@ module HackerNews
   ( getAllInfo
   ) where
 
-import           Control.Concurrent.Async
-import           Control.Exception
-import           Control.Lens
-import           Data.Aeson
+import           Control.Concurrent.Async (mapConcurrently)
+import           Control.Lens             ((^.))
+import           Data.Aeson               (FromJSON (parseJSON), Value (Object),
+                                           (.:?))
 import           Data.Aeson.Lens          (_String, key)
-import           Data.Bits                (Bits (xor))
 import           Data.Data                (typeOf)
-import           Data.Function
-import           Data.List                as DL
-import           Data.Map                 as Map
+import           Data.Function            (on)
+import           Data.List                as DL (filter, group, map, sort,
+                                                 sortBy, take)
 import qualified Data.Text.Internal       as L
-import           Data.Time
-import           Network.HTTP.Simple      ()
-import           Network.Wreq
+import           Data.Time                (diffUTCTime, getCurrentTime)
+import           Network.Wreq             (Response, asJSON, get, responseBody)
 import qualified Network.Wreq.Session     as S
 
 -- | An item can either be a top story or a comment here
@@ -100,12 +98,6 @@ mostCommon = DL.map (\x -> (head x, length x)) . group . sort
 sortMostCommon :: Ord a => [a] -> [(a, Int)]
 sortMostCommon x = DL.take 10 (sortBy (flip compare `on` snd) (mostCommon x))
 
--- | Creates a list of tuples from two lists
-createTuppleFromTwoLists :: [a] -> [b] -> [(a, b)]
-createTuppleFromTwoLists [] _          = []
-createTuppleFromTwoLists _ []          = []
-createTuppleFromTwoLists (x:xs) (y:ys) = (x, y) : createTuppleFromTwoLists xs ys
-
 -- | Returns the commentors names and occurence, this function also returns values in double, you need getCommentorAndFinalOccurence to remove them
 getTopCommentorAndOccurencePerStory ::
      Eq a => [(a, Int)] -> [(a, Int)] -> [(a, [(a, Int)])]
@@ -144,7 +136,6 @@ getAllInfo = do
         DL.map
           getAuthorsFromComments
           (listOfFirstCommentors ++ listOfSubCommentors)
-  print listOfAllComments
   let numberOfCommentsPerAuthor = mostCommon (concat listOfAllComments)
   let topCommentor = DL.map sortMostCommon listOfAllComments
   let topCommentorsWithOccurence =
@@ -152,8 +143,7 @@ getAllInfo = do
           (getCommentorAndFinalOccurence .
            getTopCommentorAndOccurencePerStory numberOfCommentsPerAuthor)
           topCommentor
-  let topCommentorPerStory =
-        createTuppleFromTwoLists listOfTitles topCommentorsWithOccurence
+  let topCommentorPerStory = zip listOfTitles topCommentorsWithOccurence
   print
     "Here are the 30 top stories with their top commenters along with their total number of comments on thos 30 stories"
   print topCommentorPerStory
