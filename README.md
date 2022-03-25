@@ -9,5 +9,5 @@ Running the main function in Main.hs will return the top 30 stories along with t
 
 ## Possible optimization
 With my current level, I was not able to code two functionnalities the way I would have liked to do it.
--  For getTitlesFromItems, getCommentsFromItems, and getAuthorsFromComments, a map solution can be implemented I thinnk to automatically get the element of Item more properly.
+-  For ``getTitlesFromItems``, ``getCommentsFromItems``, and ``getAuthorsFromComments``, a map / catmaybe solution can be implemented to automatically get the element of Item more properly.
 -  The solution to access every level of comments can be optimized in one function in my opinion instead of duplicating several lines, but i do not see how.
