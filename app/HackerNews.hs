@@ -113,38 +113,45 @@ getCommentorAndFinalOccurence ((_, []):xs) = getCommentorAndFinalOccurence xs
 getCommentorAndFinalOccurence ((x, (y, z):zs):xs) =
   (x, z) : getCommentorAndFinalOccurence xs
 
+-- | Returns the direct children (comments) of a list of items
+getChildrenComments :: [[Item]] -> IO [[Item]]
+getChildrenComments x =
+  mapConcurrently getCommentsFromId (concatMap getCommentsFromItems x)
+
 getAllInfo :: IO ()
 getAllInfo = do
   startTime <- getCurrentTime
-  print "Hello"
+  putStr "Hello"
   listOfIds <- getTop30Stories
   top30Stories <- mapConcurrently getOneItemFromId listOfIds
-  print "30 top stories have been recovered from Hacker News"
+  putStr "30 top stories have been recovered from Hacker News"
   let listOfTitles = getTitlesFromItems top30Stories
-  -- List of direct commentors ID (commented directly on the story)
-  let listOfFirstCommentorsId = getCommentsFromItems top30Stories
   -- List of direct commentors (commented directly on the story)
-  listOfFirstCommentors <-
-    mapConcurrently getCommentsFromId listOfFirstCommentorsId
-  -- List of sub commentors ID (commented on a comment)
-  let listOfSubCommentorsId = DL.map getCommentsFromItems listOfFirstCommentors
+  firstLevelComments <-
+    mapConcurrently getCommentsFromId (getCommentsFromItems top30Stories)
   -- List of sub commentors (commented on a comment)
-  listOfSubCommentors <-
-    mapConcurrently getCommentsFromId (concat listOfSubCommentorsId)
-  -- Concatenation of direct and sub commenters (does not take into account sub commentors of sub commentors)
+  secondLevelComments <- getChildrenComments firstLevelComments
+  thirdLevelComments <- getChildrenComments secondLevelComments
+  fourthLevelComments <- getChildrenComments thirdLevelComments
+  fifthLevelComments <- getChildrenComments fourthLevelComments
+  sixthLevelComments <- getChildrenComments fifthLevelComments
+  -- Concatenation of all comments
   let listOfAllComments =
-        DL.map
-          getAuthorsFromComments
-          (listOfFirstCommentors ++ listOfSubCommentors)
-  let numberOfCommentsPerAuthor = mostCommon (concat listOfAllComments)
-  let topCommentor = DL.map sortMostCommon listOfAllComments
+        firstLevelComments ++
+        secondLevelComments ++
+        thirdLevelComments ++
+        fourthLevelComments ++ fifthLevelComments ++ sixthLevelComments
+  -- List of all the commentors
+  let listOfAllCommentors = DL.map getAuthorsFromComments listOfAllComments
+  let numberOfCommentsPerAuthor = mostCommon (concat listOfAllCommentors)
+  let topCommentor = DL.map sortMostCommon listOfAllCommentors
   let topCommentorsWithOccurence =
         DL.map
           (getCommentorAndFinalOccurence .
            getTopCommentorAndOccurencePerStory numberOfCommentsPerAuthor)
           topCommentor
   let topCommentorPerStory = zip listOfTitles topCommentorsWithOccurence
-  print
+  putStr
     "Here are the 30 top stories with their top commenters along with their total number of comments on thos 30 stories"
   print topCommentorPerStory
   endTime <- getCurrentTime
